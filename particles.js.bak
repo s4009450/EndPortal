@@ -1,0 +1,259 @@
+(function () {
+  const canvas = document.getElementById("portal-canvas");
+  if (!canvas) {
+    console.error("Missing #portal-canvas element.");
+    return;
+  }
+
+  const gl = canvas.getContext("webgl", {
+    alpha: false,
+    antialias: true,
+    depth: false,
+    stencil: false,
+    premultipliedAlpha: false
+  });
+
+  if (!gl) {
+    console.error("WebGL is not available in this browser.");
+    return;
+  }
+
+  gl.enable(gl.BLEND);
+  gl.blendEquation(gl.FUNC_ADD);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+
+  const vertexSource = `
+    attribute vec2 aPosition;
+    varying vec2 vUv;
+
+    void main() {
+      vUv = aPosition * 0.5 + 0.5;
+      gl_Position = vec4(aPosition, 0.0, 1.0);
+    }
+  `;
+
+  const fragmentSource = `
+    precision highp float;
+
+    varying vec2 vUv;
+
+    uniform sampler2D uSampler0;
+    uniform sampler2D uSampler1;
+    uniform float uGameTime;
+    uniform int uEndPortalLayers;
+    uniform vec2 uResolution;
+
+    const int MAX_LAYERS = 16;
+
+    vec3 getColor(int i) {
+      if (i == 0) return vec3(0.022087, 0.098399, 0.110818);
+      if (i == 1) return vec3(0.011892, 0.095924, 0.089485);
+      if (i == 2) return vec3(0.027636, 0.101689, 0.100326);
+      if (i == 3) return vec3(0.046564, 0.109883, 0.114838);
+      if (i == 4) return vec3(0.064901, 0.117696, 0.097189);
+      if (i == 5) return vec3(0.063761, 0.086895, 0.123646);
+      if (i == 6) return vec3(0.084817, 0.111994, 0.166380);
+      if (i == 7) return vec3(0.097489, 0.154120, 0.091064);
+      if (i == 8) return vec3(0.106152, 0.131144, 0.195191);
+      if (i == 9) return vec3(0.097721, 0.110188, 0.187229);
+      if (i == 10) return vec3(0.133516, 0.138278, 0.148582);
+      if (i == 11) return vec3(0.070006, 0.243332, 0.235792);
+      if (i == 12) return vec3(0.196766, 0.142899, 0.214696);
+      if (i == 13) return vec3(0.047281, 0.315338, 0.321970);
+      if (i == 14) return vec3(0.204675, 0.390010, 0.302066);
+      return vec3(0.080955, 0.314821, 0.661491);
+    }
+
+    mat2 rotateZ(float angle) {
+      float s = sin(angle);
+      float c = cos(angle);
+      return mat2(c, -s, s, c);
+    }
+
+    vec2 endPortalUv(vec2 uv, float layer) {
+      vec2 p = uv;
+
+      p = p * 0.5 + 0.25;
+
+      p += vec2(
+        17.0 / layer,
+        (2.0 + layer / 1.5) * (uGameTime * 1.5)
+      );
+
+      float angle = radians((layer * layer * 4321.0 + layer * 9.0) * 2.0);
+      float scaleVal = (4.5 - layer / 4.0) * 2.0;
+      p = rotateZ(angle) * p * scaleVal;
+
+      return fract(p);
+    }
+
+    void main() {
+      float minDim = min(uResolution.x, uResolution.y);
+      vec2 portalUv = gl_FragCoord.xy / max(minDim, 1.0);
+
+      vec3 color = texture2D(uSampler0, fract(portalUv)).rgb * getColor(0);
+
+      for (int i = 0; i < MAX_LAYERS; i++) {
+        if (i >= uEndPortalLayers) {
+          break;
+        }
+
+        float layer = float(i + 1);
+        vec2 uv = endPortalUv(portalUv, layer);
+        color += texture2D(uSampler1, uv).rgb * getColor(i);
+      }
+
+      color = min(color * 1.35, vec3(1.0));
+      gl_FragColor = vec4(color, 0.95);
+    }
+  `;
+
+  function compileShader(type, source) {
+    const shader = gl.createShader(type);
+    if (!shader) {
+      return null;
+    }
+
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      console.error(gl.getShaderInfoLog(shader));
+      gl.deleteShader(shader);
+      return null;
+    }
+
+    return shader;
+  }
+
+  const vertexShader = compileShader(gl.VERTEX_SHADER, vertexSource);
+  const fragmentShader = compileShader(gl.FRAGMENT_SHADER, fragmentSource);
+
+  if (!vertexShader || !fragmentShader) {
+    return;
+  }
+
+  const program = gl.createProgram();
+  if (!program) {
+    console.error("Failed to create WebGL program.");
+    return;
+  }
+
+  gl.attachShader(program, vertexShader);
+  gl.attachShader(program, fragmentShader);
+  gl.linkProgram(program);
+
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    console.error(gl.getProgramInfoLog(program));
+    return;
+  }
+
+  gl.useProgram(program);
+
+  const positionLocation = gl.getAttribLocation(program, "aPosition");
+  const gameTimeLocation = gl.getUniformLocation(program, "uGameTime");
+  const layersLocation = gl.getUniformLocation(program, "uEndPortalLayers");
+  const resolutionLocation = gl.getUniformLocation(program, "uResolution");
+  const sampler0Location = gl.getUniformLocation(program, "uSampler0");
+  const sampler1Location = gl.getUniformLocation(program, "uSampler1");
+
+  const quadBuffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, quadBuffer);
+  gl.bufferData(
+    gl.ARRAY_BUFFER,
+    new Float32Array([
+      -1, -1,
+      1, -1,
+      -1, 1,
+      1, 1
+    ]),
+    gl.STATIC_DRAW
+  );
+
+  gl.enableVertexAttribArray(positionLocation);
+  gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+
+  function createTexture(unit) {
+    const texture = gl.createTexture();
+    gl.activeTexture(unit);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA,
+      1,
+      1,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      new Uint8Array([0, 0, 0, 255])
+    );
+    return texture;
+  }
+
+  const texture0 = createTexture(gl.TEXTURE0);
+  const texture1 = createTexture(gl.TEXTURE1);
+
+  const END_PORTAL_LAYERS = 15;
+
+  gl.uniform1i(sampler0Location, 0);
+  gl.uniform1i(sampler1Location, 1);
+  gl.uniform1i(layersLocation, END_PORTAL_LAYERS);
+
+  const image = new Image();
+  image.src = "end_portal.png";
+
+  let textureReady = false;
+
+  image.addEventListener("load", function () {
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, texture0);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, texture1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+
+    textureReady = true;
+  });
+
+  image.addEventListener("error", function () {
+    console.error("Failed to load end_portal.png");
+  });
+
+  function resize() {
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    const width = Math.floor(window.innerWidth * dpr);
+    const height = Math.floor(window.innerHeight * dpr);
+
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+
+    gl.viewport(0, 0, canvas.width, canvas.height);
+  }
+
+  function render(timeMs) {
+    resize();
+
+    gl.clearColor(0, 0, 0, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    if (textureReady) {
+      gl.uniform2f(resolutionLocation, canvas.width, canvas.height);
+      gl.uniform1f(gameTimeLocation, timeMs * 0.00012);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
+
+    requestAnimationFrame(render);
+  }
+
+  window.addEventListener("resize", resize);
+  resize();
+  requestAnimationFrame(render);
+})();
